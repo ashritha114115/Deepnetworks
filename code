@@ -1,0 +1,126 @@
+import os
+import zipfile
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import tensorflow as tf
+from tensorflow.keras.preprocessing.image import ImageDataGenerator
+from tensorflow.keras.applications import ResNet50, VGG16
+from tensorflow.keras.layers import Dense, GlobalAveragePooling2D, Dropout
+from tensorflow.keras.models import Model
+from tensorflow.keras.optimizers import Adam
+from sklearn.metrics import classification_report, confusion_matrix
+import seaborn as sns
+
+# 1. Define path to your zipped dataset
+dataset_path = '/content/DL-DATASET.zip'  # Correct path to your zip file
+
+# 2. Extract the zip file to a temporary directory
+with zipfile.ZipFile(dataset_path, 'r') as zip_ref:
+    zip_ref.extractall('/content/dataset')  # Extract to '/content/dataset'
+
+# 3. Update paths for train and test directories
+train_dir = os.path.join('/content/dataset', 'Training')  # Corrected path
+test_dir = os.path.join('/content/dataset', 'Testing')    # Corrected path
+img_width, img_height = 224, 224
+batch_size = 32
+
+# Data augmentation for training
+train_datagen = ImageDataGenerator(
+    rescale=1./255,
+    rotation_range=20,
+    width_shift_range=0.2,
+    height_shift_range=0.2,
+    shear_range=0.2,
+    zoom_range=0.2,
+    horizontal_flip=True,
+    fill_mode='nearest'
+)
+
+# Only rescaling for testing
+test_datagen = ImageDataGenerator(rescale=1./255)
+
+# Load training and testing data
+train_generator = train_datagen.flow_from_directory(
+    train_dir,
+    target_size=(img_width, img_height),
+    batch_size=batch_size,
+    class_mode='categorical'
+)
+
+test_generator = test_datagen.flow_from_directory(
+    test_dir,
+    target_size=(img_width, img_height),
+    batch_size=batch_size,
+    class_mode='categorical',
+    shuffle=False # Important for confusion matrix and classification report
+)
+
+# Model Selection (ResNet50 or VGG16)
+def build_model(base_model, input_shape=(img_width, img_height, 3), num_classes=4):
+    """Builds a model using transfer learning."""
+    for layer in base_model.layers:
+        layer.trainable = False  # Freeze base layers
+
+    x = base_model.output
+    x = GlobalAveragePooling2D()(x)
+    x = Dense(1024, activation='relu')(x)
+    x = Dropout(0.5)(x)
+    predictions = Dense(num_classes, activation='softmax')(x)
+
+    model = Model(inputs=base_model.input, outputs=predictions)
+    return model
+
+# Choose Resnet50 or VGG16
+base_model = ResNet50(weights='imagenet', include_top=False, input_shape=(img_width, img_height, 3)) #or VGG16
+#base_model = VGG16(weights='imagenet', include_top=False, input_shape=(img_width, img_height, 3))
+
+model = build_model(base_model, num_classes=len(train_generator.class_indices))
+
+# Compile the model
+model.compile(optimizer=Adam(learning_rate=0.0001), loss='categorical_crossentropy', metrics=['accuracy'])
+
+# Train the model
+epochs = 3
+history = model.fit(
+    train_generator,
+    epochs=epochs,
+    validation_data=test_generator
+)
+
+# Evaluate the model
+loss, accuracy = model.evaluate(test_generator)
+print(f"Test Loss: {loss:.4f}, Test Accuracy: {accuracy:.4f}")
+
+# Classification Report and Confusion Matrix
+y_true = test_generator.classes
+y_pred = model.predict(test_generator)
+y_pred_classes = np.argmax(y_pred, axis=1)
+
+print("Classification Report:")
+print(classification_report(y_true, y_pred_classes, target_names=test_generator.class_indices.keys()))
+
+print("Confusion Matrix:")
+cm = confusion_matrix(y_true, y_pred_classes)
+plt.figure(figsize=(8, 6))
+sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', xticklabels=test_generator.class_indices.keys(), yticklabels=test_generator.class_indices.keys())
+plt.xlabel('Predicted Labels')
+plt.ylabel('True Labels')
+plt.title('Confusion Matrix')
+plt.show()
+
+# Plot training history
+plt.plot(history.history['accuracy'], label='accuracy')
+plt.plot(history.history['val_accuracy'], label = 'val_accuracy')
+plt.xlabel('Epoch')
+plt.ylabel('Accuracy')
+plt.ylim([0, 1])
+plt.legend(loc='lower right')
+plt.show()
+
+plt.plot(history.history['loss'], label='loss')
+plt.plot(history.history['val_loss'], label = 'val_loss')
+plt.xlabel('Epoch')
+plt.ylabel('Loss')
+plt.legend(loc='upper right')
+plt.show()
